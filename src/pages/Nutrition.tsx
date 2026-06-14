@@ -1,0 +1,30 @@
+import { Bot, Droplets, Minus, Pencil, Plus, Trash2, Utensils } from 'lucide-react'
+import type { AppData, FoodLog } from '../types'
+import { Card, Metric, PageHeader, ProgressBar } from '../components/ui'
+
+export default function Nutrition({ data, onAdd, onEdit, onDelete, onWaterChange, onNutritionPlan }: { data: AppData; onAdd: () => void; onEdit: (food: FoodLog) => void; onDelete: (id: string) => void; onWaterChange: (value: number) => void; onNutritionPlan: () => void }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const todayFoods = data.foods.filter(food => (food.loggedDate || today) === today)
+  const totals = todayFoods.reduce((a, f) => ({ calories: a.calories + f.calories, protein: a.protein + f.protein, carbs: a.carbs + f.carbs, fat: a.fat + f.fat }), { calories: 0, protein: 0, carbs: 0, fat: 0 })
+  const grouped = todayFoods.reduce<Record<string, FoodLog[]>>((a, food) => { (a[food.meal] ||= []).push(food); return a }, {})
+  const waterPercent = data.plan.waterTarget ? data.checkin.waterMl / data.plan.waterTarget * 100 : 0
+  const waterStatus = data.checkin.waterMl >= data.plan.waterTarget ? '今日饮水目标已完成' : `还需 ${Math.max(0, data.plan.waterTarget - data.checkin.waterMl)} ml`
+
+  return <div>
+    <PageHeader title="饮食记录" subtitle={new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric' }).format(new Date())} action={<button onClick={onAdd} title="添加食物" className="grid h-11 w-11 place-items-center rounded-lg bg-ink text-white"><Plus size={21} /></button>} />
+    <button onClick={onNutritionPlan} className="mb-4 flex min-h-14 w-full items-center gap-3 rounded-lg bg-cobalt px-4 text-left text-white"><Bot size={21} /><span className="min-w-0 flex-1"><strong className="block text-sm">生成我的今日饮食计划</strong><small className="text-white/65">结合身材目标、训练和今日状态</small></span></button>
+    <Card className="!bg-ink text-white">
+      <div className="space-y-5">
+        <Metric dark label="今日热量" value={totals.calories} target={data.plan.calorieTarget} unit="kcal" color="bg-coral" />
+        <Metric dark label="蛋白质" value={totals.protein} target={data.plan.proteinTarget} unit="g" color="bg-lime" />
+      </div>
+      <div className="mt-5 grid grid-cols-3 divide-x divide-white/10 border-t border-white/10 pt-4 text-center"><div><strong className="block text-sm">{totals.carbs}g</strong><small className="text-[10px] text-white/45">碳水</small></div><div><strong className="block text-sm">{totals.fat}g</strong><small className="text-[10px] text-white/45">脂肪</small></div><div><strong className="block text-sm">{Math.max(0, data.plan.proteinTarget - totals.protein)}g</strong><small className="text-[10px] text-white/45">蛋白差额</small></div></div>
+    </Card>
+
+    <Card className="mt-4 !bg-[#e2f5f2]"><div className="flex items-start gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-white text-[#168b80]"><Droplets size={21} /></span><span className="min-w-0 flex-1"><small className="font-bold text-[#168b80]">AI 饮水计划</small><h2 className="mt-1 font-extrabold">目标 {data.plan.waterTarget} ml</h2><p className="mt-1 text-xs leading-5 text-black/45">根据体重、训练和今日状态生成；出汗较多时会提高。</p></span></div><div className="mt-4"><div className="mb-2 flex items-end justify-between gap-3"><span className="text-xs text-black/50">实际饮水</span><strong>{data.checkin.waterMl} ml</strong></div><ProgressBar value={waterPercent} color="bg-[#168b80]" /><p className="mt-2 text-xs text-black/45">{waterStatus}</p></div><div className="mt-4 grid grid-cols-[44px_1fr_44px] gap-2"><button onClick={() => onWaterChange(Math.max(0, data.checkin.waterMl - 250))} title="减少250毫升" className="grid h-11 place-items-center rounded-lg bg-white"><Minus size={18} /></button><input inputMode="numeric" value={data.checkin.waterMl || ''} onFocus={event => event.currentTarget.select()} onChange={event => onWaterChange(Math.max(0, Number(event.target.value.replace(/\D/g, '')) || 0))} className="min-w-0 rounded-lg border border-black/8 bg-white px-3 text-center text-sm font-bold outline-none" placeholder="输入实际饮水 ml" /><button onClick={() => onWaterChange(data.checkin.waterMl + 250)} title="增加250毫升" className="grid h-11 place-items-center rounded-lg bg-white"><Plus size={18} /></button></div></Card>
+
+    <div className="mt-5 space-y-5">{Object.entries(grouped).map(([meal, foods]) => <section key={meal}><div className="mb-2 flex items-center justify-between"><h2 className="font-extrabold">{meal}</h2><span className="text-xs text-black/40">{foods.reduce((sum, food) => sum + food.calories, 0)} kcal</span></div><Card className="!p-0">{foods.map(food => <div key={food.id} className="flex items-center gap-3 border-b border-black/6 p-4 last:border-0"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-paper"><Utensils size={17} /></span><span className="min-w-0 flex-1"><strong className="block truncate text-sm">{food.name}{food.estimated && <span className="ml-2 rounded bg-blue-50 px-1.5 py-1 text-[9px] text-cobalt">AI估算</span>}</strong><small className="block truncate text-black/45">{food.amount} · 蛋白质 {food.protein}g</small></span><span className="shrink-0 text-sm font-bold">{food.calories}</span><button onClick={() => onEdit(food)} title="编辑"><Pencil size={17} className="text-black/35" /></button><button onClick={() => onDelete(food.id)} title="删除"><Trash2 size={17} className="text-black/25" /></button></div>)}</Card></section>)}</div>
+    {!todayFoods.length && <Card className="mt-5 py-8 text-center"><Utensils className="mx-auto text-black/20" /><strong className="mt-3 block text-sm">今天还没有饮食记录</strong><p className="mt-1 text-xs text-black/40">点击右上角添加，或直接告诉 AI 你吃了什么。</p></Card>}
+    <Card className="mt-4 !bg-blue-50"><h3 className="text-xs font-bold text-cobalt">AI 饮食建议</h3><p className="mt-2 text-sm leading-6 text-blue-950/70">{!todayFoods.length ? '记录第一餐后，AI 会根据剩余热量和蛋白质给出建议。' : totals.protein < data.plan.proteinTarget - 30 ? `今天还差 ${data.plan.proteinTarget - totals.protein}g 蛋白质，下一餐优先瘦肉、鱼、蛋或低脂奶。` : '蛋白质已接近目标，后续保持总热量稳定并补充蔬菜。'}</p></Card>
+  </div>
+}

@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+html { background: #e9ece7; color: #131714; letter-spacing: 0; }
+body { margin: 0; min-width: 320px; min-height: 100vh; overflow-x: hidden; font-family: Inter, "Noto Sans SC", system-ui, sans-serif; }
+button, input, textarea, select { font: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+.scrollbar-none { scrollbar-width: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
+input[type="range"] { min-height: 28px; }
+@media (max-width: 350px) {
+  body { font-size: 14px; }
+}
