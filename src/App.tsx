@@ -6,7 +6,7 @@ import { calculateTargets, generateRulePlan } from './services/ruleEngine'
 import { analyzeLiveWorkoutFeedback, estimateFoodNutrition, generateDailyPlan, generatePersonalizedNutritionPlan, generateSevenDaySchedule, generateWorkoutAdjustment, processCoachMessage, testAIConnection, type AISettings } from './services/aiCoachService'
 import { supabaseEnabled } from './services/supabase'
 import { supabase } from './services/supabase'
-import { loadCloudData, saveCloudData, saveProfile, saveBodyMetrics, signInWithPassword, signOut, signUpWithPassword } from './services/cloudSync'
+import { loadAllCloudData, saveCloudData, saveProfile, saveNutritionLog, saveDailyCheckin, saveBodyMetricsEntry, saveWorkoutSession, saveWeeklyReport, saveCoachMessage, signInWithPassword, signOut, signUpWithPassword } from './services/cloudSync'
 import BottomNav from './components/BottomNav'
 import Onboarding from './components/Onboarding'
 import Home from './pages/Home'
@@ -48,8 +48,8 @@ export default function App() {
       const user = sessionData.session?.user
       if (!user) { cloudReady.current = true; setAuthReady(true); return }
       setCloudUser({ id: user.id, email: user.email })
-      const cloud = await loadCloudData(user.id)
-      if (cloud) setData(current => ({ ...current, ...cloud, checkin: { ...current.checkin, ...cloud.checkin }, plan: { ...current.plan, ...cloud.plan, cardio: { ...current.plan.cardio, ...cloud.plan?.cardio } } }))
+      const merged = await loadAllCloudData(user.id)
+      if (merged) setData(current => ({ ...current, ...merged, checkin: { ...current.checkin, ...merged.checkin }, plan: { ...current.plan, ...merged.plan, cardio: { ...current.plan.cardio, ...merged.plan?.cardio } } }))
       cloudReady.current = true
       setAuthReady(true)
       setSyncStatus('云端已同步')
@@ -57,8 +57,8 @@ export default function App() {
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       const user = session?.user
       if (user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
-        loadCloudData(user.id).then(cloud => {
-          if (cloud) setData(current => ({ ...current, ...cloud, checkin: { ...current.checkin, ...cloud.checkin }, plan: { ...current.plan, ...cloud.plan, cardio: { ...current.plan.cardio, ...cloud.plan?.cardio } } }))
+        loadAllCloudData(user.id).then(merged => {
+          if (merged) setData(current => ({ ...current, ...merged, checkin: { ...current.checkin, ...merged.checkin }, plan: { ...current.plan, ...merged.plan, cardio: { ...current.plan.cardio, ...merged.plan?.cardio } } }))
         }).catch(() => {})
         setCloudUser({ id: user.id, email: user.email })
       } else if (!user) {
@@ -79,7 +79,7 @@ export default function App() {
   const update = (patch: Partial<AppData>) => setData(current => ({ ...current, ...patch }))
 
   if (!authReady) return <div className="grid min-h-dvh place-items-center bg-paper text-sm text-black/45">正在检查登录状态...</div>
-  if (supabaseEnabled && !cloudUser) return <AccountGate cloudEnabled onLogin={async (account, password) => { const user = await signInWithPassword(account, password); if (user) { const cloud = await loadCloudData(user.id); if (cloud) setData(current => ({ ...current, ...cloud, checkin: { ...current.checkin, ...cloud.checkin }, plan: { ...current.plan, ...cloud.plan, cardio: { ...current.plan.cardio, ...cloud.plan?.cardio } } })); setCloudUser({ id: user.id, email: user.email }) } }} onRegister={async (account, password, name) => { const result = await signUpWithPassword(account, password, name); if (!result.session || !result.user) throw new Error('注册成功，请先到邮箱完成验证，再返回登录'); setCloudUser({ id: result.user.id, email: result.user.email }); setData(current => ({ ...current, profile: { ...current.profile, name } })) }} />
+  if (supabaseEnabled && !cloudUser) return <AccountGate cloudEnabled onLogin={async (account, password) => { const user = await signInWithPassword(account, password); if (user) { const merged = await loadAllCloudData(user.id); if (merged) setData(current => ({ ...current, ...merged, checkin: { ...current.checkin, ...merged.checkin }, plan: { ...current.plan, ...merged.plan, cardio: { ...current.plan.cardio, ...merged.plan?.cardio } } })); setCloudUser({ id: user.id, email: user.email }) } }} onRegister={async (account, password, name) => { const result = await signUpWithPassword(account, password, name); if (!result.session || !result.user) throw new Error('注册成功，请先到邮箱完成验证，再返回登录'); setCloudUser({ id: result.user.id, email: result.user.email }); setData(current => ({ ...current, profile: { ...current.profile, name } })) }} />
   if (!supabaseEnabled && !localUsername) return <AccountGate cloudEnabled={false} onLogin={async (account, password) => { const active = await loginLocalUser(account, password); setLocalUsername(active); setData(loadData(active)) }} onRegister={async (account, password, name) => { const active = await registerLocalUser(account, password, name); setLocalUsername(active); setData(loadData(active)) }} />
 
   if (!data.onboarded) return <Onboarding profile={data.profile} onComplete={async profile => {
@@ -87,7 +87,8 @@ export default function App() {
     update({ profile, checkin, onboarded: true })
     if (cloudUser) {
       saveProfile(cloudUser.id, profile).catch(() => {})
-      saveBodyMetrics(cloudUser.id, profile.weightKg).catch(() => {})
+      const todayStr = new Date().toISOString().slice(0, 10)
+      saveBodyMetricsEntry(cloudUser.id, todayStr, profile.weightKg).catch(() => {})
     }
     try {
       const plan = await generateDailyPlan(profile, {}, checkin, '根据首次问卷生成初始训练、营养和饮水计划', ai)
@@ -98,6 +99,8 @@ export default function App() {
 
   const saveCheckinAndGenerate = async (checkin: AppData['checkin']) => {
     setLoading(true)
+    const todayStr = new Date().toISOString().slice(0, 10)
+    if (cloudUser) saveDailyCheckin(cloudUser.id, checkin, todayStr).catch(() => {})
     try {
       const plan = await generateDailyPlan(data.profile, { foods: data.foods, weights: data.weightHistory, previousPlan: data.plan }, checkin, '根据我刚更新的今日状态重新生成今天的训练和有氧计划', ai)
       const weeklySchedule = await generateSevenDaySchedule(data.profile, checkin, { foods: data.foods, weights: data.weightHistory }, ai)
@@ -127,7 +130,12 @@ export default function App() {
       }
       if (Object.keys(patch).length) update(patch)
       const foodSummary = newFoods.length ? `\n已加入 ${newFoods.length} 条饮食记录：${newFoods.map(food => `${food.name} ${food.calories} kcal`).join('；')}` : ''
-      setCoachReply(`${result.reply}${foodSummary}`)
+      const reply = `${result.reply}${foodSummary}`
+      if (cloudUser) {
+        saveCoachMessage(cloudUser.id, 'user', message).catch(() => {})
+        saveCoachMessage(cloudUser.id, 'assistant', reply).catch(() => {})
+      }
+      setCoachReply(reply)
       setMessage('')
     } catch (error) {
       setCoachReply(error instanceof Error ? error.message : 'AI 分析失败，请重试')
@@ -164,7 +172,7 @@ export default function App() {
     <BottomNav tab={tab} onChange={setTab} />
 
     {modal === 'checkin' && <CheckinModal data={data} loading={loading} onSave={saveCheckinAndGenerate} onClose={() => setModal(null)} />}
-    {modal === 'food' && <FoodModal ai={ai} initialFood={selectedFood} onSave={food => { update({ foods: selectedFood ? data.foods.map(item => item.id === food.id ? food : item) : [...data.foods, food] }); setSelectedFood(null); setModal(null) }} onClose={() => { setSelectedFood(null); setModal(null) }} />}
+    {modal === 'food' && <FoodModal ai={ai} initialFood={selectedFood} onSave={food => { update({ foods: selectedFood ? data.foods.map(item => item.id === food.id ? food : item) : [...data.foods, food] }); if (cloudUser) saveNutritionLog(cloudUser.id, food).catch(() => {}); setSelectedFood(null); setModal(null) }} onClose={() => { setSelectedFood(null); setModal(null) }} />}
     {modal === 'coach' && <Modal title="AI 教练" onClose={() => setModal(null)}>
       <div className="mb-4 rounded-lg bg-cobalt p-4 text-white"><div className="flex items-center gap-2 text-sm font-bold"><Bot size={18} /> 当前读取范围</div><p className="mt-2 text-xs leading-5 text-white/65">个人档案、今日状态、近期饮食、体重趋势、器械和疼痛记录。</p></div>
       <textarea className={`${fieldClass} min-h-32 py-3`} value={message} onChange={e => setMessage(e.target.value)} placeholder="例如：早上吃了两个鸡蛋和一杯牛奶，中午吃了烤牛肉拌饭。" />
@@ -175,7 +183,7 @@ export default function App() {
     {modal === 'settings' && <Modal title="设置" onClose={() => setModal(null)}>
       <div className="mb-5 flex items-center gap-3 rounded-lg bg-white p-4"><span className="grid h-12 w-12 place-items-center rounded-lg bg-lime text-lg font-extrabold">{data.profile.name.slice(0,1)}</span><span><strong>{data.profile.name}</strong><small className="block text-black/45">{data.profile.goalType} · {data.profile.goalWeeks} 周</small></span></div>
       <label className="block text-sm font-bold">姓名<input className={fieldClass} value={data.profile.name} onChange={e => update({ profile: { ...data.profile, name: e.target.value } })} /></label>
-      <div className="mt-4 grid grid-cols-2 gap-3"><label className="text-sm font-bold">当前体重<input type="number" className={fieldClass} value={data.profile.weightKg || ''} onFocus={event => event.currentTarget.select()} onChange={e => update({ profile: { ...data.profile, weightKg: +e.target.value } })} /></label><label className="text-sm font-bold">目标体重<input type="number" className={fieldClass} value={data.profile.targetWeightKg || ''} onFocus={event => event.currentTarget.select()} onChange={e => update({ profile: { ...data.profile, targetWeightKg: +e.target.value } })} /></label></div>
+      <div className="mt-4 grid grid-cols-2 gap-3"><label className="text-sm font-bold">当前体重<input type="number" className={fieldClass} value={data.profile.weightKg || ''} onFocus={event => event.currentTarget.select()} onChange={e => { const val = +e.target.value; const today = new Date().toISOString().slice(0, 10); const i = data.weightHistory.findIndex(w => w.date === today); update({ profile: { ...data.profile, weightKg: val }, weightHistory: i >= 0 ? data.weightHistory.map((w, idx) => idx === i ? { ...w, weight: val } : w) : [...data.weightHistory, { date: today, weight: val, waist: 0 }] }) }} onBlur={e => { if (cloudUser) { const val = +e.target.value; if (val > 0) saveBodyMetricsEntry(cloudUser.id, new Date().toISOString().slice(0, 10), val).catch(() => {}) } }} /></label><label className="text-sm font-bold">目标体重<input type="number" className={fieldClass} value={data.profile.targetWeightKg || ''} onFocus={event => event.currentTarget.select()} onChange={e => update({ profile: { ...data.profile, targetWeightKg: +e.target.value } })} /></label></div>
       {!publicUserMode && <><h3 className="mb-3 mt-6 font-extrabold">AI 接入</h3>
       <Segmented options={['None','DeepSeek','OpenAI'] as AISettings['provider'][]} value={ai.provider} onChange={provider => setAi({ ...ai, provider, model: provider === 'OpenAI' ? 'gpt-4.1-mini' : 'deepseek-chat' })} />
       <label className="mt-3 block text-sm font-bold">API Key<input type="password" className={fieldClass} value={ai.apiKey} onChange={e => setAi({ ...ai, apiKey: e.target.value })} placeholder="仅保存在当前设备" /></label>
@@ -208,7 +216,7 @@ export default function App() {
     </Modal>}
     {modal === 'detail' && selected && <Modal title={selected.name} onClose={() => setModal(null)}><div className="flex flex-wrap gap-2 text-xs font-bold"><span className="rounded-md bg-lime px-3 py-2">{selected.muscle}</span><span className="rounded-md bg-white px-3 py-2">{selected.equipment}</span><span className="rounded-md bg-white px-3 py-2">风险 {selected.risk}</span></div><h3 className="mb-2 mt-5 font-extrabold">动作步骤</h3><ol className="space-y-3">{selected.steps.map((s,i) => <li key={s} className="flex gap-3 text-sm leading-6"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-ink text-xs text-white">{i+1}</span>{s}</li>)}</ol><h3 className="mb-2 mt-5 font-extrabold">发力感觉</h3><p className="rounded-lg bg-blue-50 p-4 text-sm leading-6">{selected.cues}</p><h3 className="mb-2 mt-5 font-extrabold">常见错误</h3><div className="space-y-2">{selected.mistakes.map(m => <p key={m} className="text-sm text-black/60">· {m}</p>)}</div><h3 className="mb-2 mt-5 font-extrabold">替代动作</h3><p className="text-sm leading-6 text-black/60">{selected.alternatives.join('、')}</p></Modal>}
     {modal === 'replace' && selected && <Modal title="替换动作" onClose={() => setModal(null)}><p className="mb-4 text-sm text-black/50">替换 {selected.name}，优先同肌群、低风险和已有器械。</p>{selected.alternatives.map((name,i) => <button key={name} onClick={() => { const replacement = { ...selected, id: `${selected.id}-alt-${i}`, name, risk: '低' }; update({ plan: { ...data.plan, exercises: data.plan.exercises.map(e => e.id === selected.id ? replacement : e) } }); setModal(null) }} className="mb-2 flex min-h-14 w-full items-center justify-between rounded-lg bg-white px-4 text-left text-sm font-bold"><span>{name}</span><small className="text-black/35">{i === 0 ? '首选' : '可用'}</small></button>)}</Modal>}
-    {modal === 'report' && <ReportModal data={data} onClose={() => setModal(null)} />}
+    {modal === 'report' && <ReportModal data={data} cloudUserId={cloudUser?.id} onClose={() => setModal(null)} />}
     {modal === 'nutritionPlan' && <Modal title="今日饮食计划" onClose={() => setModal(null)}>{loading || !nutritionPlan ? <div className="grid min-h-48 place-items-center text-center text-sm text-black/45"><div><RefreshCw className="mx-auto mb-3 animate-spin" />AI 正在结合你的目标生成</div></div> : <div><Card className="!bg-ink text-white"><small className="font-bold text-lime">目标身材</small><h3 className="mt-2 text-lg font-extrabold">{data.profile.desiredResult}</h3><p className="mt-2 text-sm leading-6 text-white/65">{nutritionPlan.summary}</p></Card><div className="mt-4 space-y-2">{nutritionPlan.meals.map(meal => <Card key={meal.meal}><div className="flex items-center justify-between gap-3"><strong>{meal.meal}</strong><span className="text-right text-xs font-bold text-cobalt">{meal.targetCalories} kcal · {meal.targetProtein}g 蛋白</span></div><p className="mt-2 text-sm leading-6 text-black/55">{meal.suggestion}</p></Card>)}</div><Card className="mt-4 !bg-blue-50"><strong className="text-sm text-cobalt">今日注意</strong>{nutritionPlan.tips.map(tip => <p key={tip} className="mt-2 text-sm text-black/60">· {tip}</p>)}</Card></div>}</Modal>}
     {modal === 'calendar' && <CalendarModal data={data} loading={loading} onClose={() => setModal(null)} onRegenerate={async () => { setLoading(true); try { const weeklySchedule = await generateSevenDaySchedule(data.profile, data.checkin, { foodCount: data.foods.length, latestWeight: data.weightHistory[data.weightHistory.length - 1] }, ai); update({ weeklySchedule }) } catch (error) { setCoachReply(error instanceof Error ? error.message : 'AI 日历生成失败') } finally { setLoading(false) } }} />}
     {modal === 'finishWorkout' && <FinishWorkoutModal loading={loading} onClose={() => setModal(null)} onSave={async feedback => {
@@ -217,6 +225,10 @@ export default function App() {
         const result = await generateWorkoutAdjustment(data.profile, { plan: data.plan, completedExercises: data.completedExercises }, feedback, ai) as { reply?: string; volumeChangePercent?: number; reason?: string }
         const volumeChange = Number(result.volumeChangePercent) || 0
         update({ plan: { ...data.plan, volumeChange }, adjustmentLogs: [...data.adjustmentLogs, { date: new Date().toISOString(), reason: result.reason || feedback, change: result.reply || `下次训练量调整 ${volumeChange}%` }] })
+        if (cloudUser) {
+          const todayStr = new Date().toISOString().slice(0, 10)
+          saveWorkoutSession(cloudUser.id, { sessionDate: todayStr, status: 'completed', plan: data.plan, completedExercises: data.completedExercises, completedCardio: data.completedCardio, feedback }).catch(() => {})
+        }
         setCoachReply(result.reply || '训练已保存，后续计划已根据反馈更新。')
         setModal(null)
       } catch (error) { setCoachReply(error instanceof Error ? error.message : '反馈分析失败'); setModal(null) }
@@ -310,7 +322,7 @@ function CalendarModal({ data, loading, onRegenerate, onClose }: { data: AppData
   })}</div><div className="mt-3 flex items-center gap-4 text-[10px] text-black/45"><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-cobalt" />完成目标</span><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-lime" />计划训练</span><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-black/20" />休息</span></div>{selected && <Card className={`mt-4 ${todayComplete ? '!border-cobalt !bg-blue-50' : ''}`}><div className="flex items-center justify-between"><div><small className="text-black/40">{selected.date} · {selected.weekday}</small><h3 className="mt-1 font-extrabold">{selected.focus}</h3></div>{todayComplete && <span className="rounded bg-cobalt px-2 py-1 text-xs font-bold text-white">已完成</span>}</div><p className="mt-2 text-sm text-black/55">{selected.trainingType} · {selected.duration} 分钟{selected.cardioMinutes ? ` · 有氧 ${selected.cardioMinutes} 分钟` : ''}</p><div className="mt-4 border-t border-black/6 pt-3"><div className="flex justify-between text-xs"><strong>饮食记录</strong><span>{foods.length ? `${calories} kcal · ${protein}g 蛋白` : '暂无记录'}</span></div>{foods.length ? <p className="mt-2 text-xs leading-5 text-black/45">{foods.map(food => food.name).join('、')}</p> : <p className="mt-2 text-xs text-black/45">目标 {data.plan.calorieTarget} kcal · 蛋白质 {data.plan.proteinTarget}g</p>}</div></Card>}<button disabled={loading} onClick={onRegenerate} className={`${primaryButton} mt-4 flex w-full items-center justify-center gap-2`}><RefreshCw size={17} className={loading ? 'animate-spin' : ''} />AI 重新安排</button></Modal>
 }
 
-function ReportModal({ data, onClose }: { data: AppData; onClose: () => void }) {
+function ReportModal({ data, cloudUserId, onClose }: { data: AppData; cloudUserId?: string; onClose: () => void }) {
   const today = new Date().toISOString().slice(0, 10)
   const foods = data.foods.filter(food => (food.loggedDate || today) === today)
   const calories = foods.reduce((sum, food) => sum + food.calories, 0)
@@ -318,5 +330,11 @@ function ReportModal({ data, onClose }: { data: AppData; onClose: () => void }) 
   const workoutRate = data.plan.exercises.length ? Math.round(data.completedExercises.length / data.plan.exercises.length * 100) : 0
   const nutritionScore = foods.length ? Math.min(50, Math.round(protein / Math.max(1, data.plan.proteinTarget) * 25) + Math.max(0, Math.round((1 - Math.abs(calories - data.plan.calorieTarget) / Math.max(1, data.plan.calorieTarget)) * 25))) : 0
   const score = Math.min(100, nutritionScore + Math.round(workoutRate * .35) + (data.checkin.sleepHours ? Math.min(15, Math.round(data.checkin.sleepHours / 8 * 15)) : 0))
+  useEffect(() => {
+    if (!cloudUserId) return
+    const d = new Date(); const dow = d.getDay()
+    const monday = new Date(d); monday.setDate(monday.getDate() - ((dow + 6) % 7))
+    saveWeeklyReport(cloudUserId, monday.toISOString().slice(0, 10), { score, date: today, nutrition: { calories, protein }, workout: { completed: data.completedExercises.length, total: data.plan.exercises.length, rate: workoutRate } }).catch(() => {})
+  }, [cloudUserId])
   return <Modal title="本周报告" onClose={onClose}><div className="rounded-xl bg-ink p-5 text-white"><small className="text-white/45">当前记录评分</small><strong className="mt-2 block text-4xl text-lime">{score}</strong><p className="mt-3 text-sm text-white/65">未记录项目按 0 分计算</p></div><div className="mt-4 space-y-3"><Card><strong className="text-sm">营养</strong><p className="mt-2 text-sm text-black/55">今日 {calories} kcal，蛋白质 {protein}g。{foods.length ? '统计仅来自实际饮食记录。' : '暂无饮食记录。'}</p></Card><Card><strong className="text-sm">训练</strong><p className="mt-2 text-sm text-black/55">已完成 {data.completedExercises.length}/{data.plan.exercises.length} 个动作，完成率 {workoutRate}%。</p></Card><Card><strong className="text-sm">身体数据</strong><p className="mt-2 text-sm text-black/55">{data.weightHistory.length ? `已有 ${data.weightHistory.length} 条体重/腰围记录。` : '暂无体重和腰围趋势记录。'}</p></Card></div></Modal>
 }
