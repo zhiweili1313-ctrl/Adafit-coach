@@ -46,3 +46,25 @@ export async function saveCloudData(userId: string, appData: AppData) {
   })
   if (error) throw error
 }
+
+export async function saveProfile(userId: string, profile: AppData['profile']) {
+  if (!supabase) return
+  const { error } = await supabase.from('profiles').upsert({
+    user_id: userId,
+    data: profile as unknown as Record<string, unknown>,
+    updated_at: new Date().toISOString()
+  })
+  if (error) throw error
+}
+
+export async function saveBodyMetrics(userId: string, weightKg: number, waistCm?: number) {
+  if (!supabase) return
+  const { error } = await supabase.from('body_metrics').upsert({
+    user_id: userId,
+    measured_at: new Date().toISOString().slice(0, 10),
+    weight_kg: weightKg,
+    waist_cm: waistCm ?? null,
+    data: {}
+  }, { onConflict: 'user_id, measured_at' })
+  if (error) throw error
+}

@@ -6,7 +6,7 @@ import { calculateTargets, generateRulePlan } from './services/ruleEngine'
 import { analyzeLiveWorkoutFeedback, estimateFoodNutrition, generateDailyPlan, generatePersonalizedNutritionPlan, generateSevenDaySchedule, generateWorkoutAdjustment, processCoachMessage, testAIConnection, type AISettings } from './services/aiCoachService'
 import { supabaseEnabled } from './services/supabase'
 import { supabase } from './services/supabase'
-import { loadCloudData, saveCloudData, signInWithPassword, signOut, signUpWithPassword } from './services/cloudSync'
+import { loadCloudData, saveCloudData, saveProfile, saveBodyMetrics, signInWithPassword, signOut, signUpWithPassword } from './services/cloudSync'
 import BottomNav from './components/BottomNav'
 import Onboarding from './components/Onboarding'
 import Home from './pages/Home'
@@ -54,9 +54,16 @@ export default function App() {
       setAuthReady(true)
       setSyncStatus('云端已同步')
     }).catch(() => { cloudReady.current = true; setAuthReady(true) })
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       const user = session?.user
-      setCloudUser(user ? { id: user.id, email: user.email } : null)
+      if (user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
+        loadCloudData(user.id).then(cloud => {
+          if (cloud) setData(current => ({ ...current, ...cloud, checkin: { ...current.checkin, ...cloud.checkin }, plan: { ...current.plan, ...cloud.plan, cardio: { ...current.plan.cardio, ...cloud.plan?.cardio } } }))
+        }).catch(() => {})
+        setCloudUser({ id: user.id, email: user.email })
+      } else if (!user) {
+        setCloudUser(null)
+      }
       setAuthReady(true)
     })
     return () => listener.subscription.unsubscribe()
@@ -72,12 +79,16 @@ export default function App() {
   const update = (patch: Partial<AppData>) => setData(current => ({ ...current, ...patch }))
 
   if (!authReady) return <div className="grid min-h-dvh place-items-center bg-paper text-sm text-black/45">正在检查登录状态...</div>
-  if (supabaseEnabled && !cloudUser) return <AccountGate cloudEnabled onLogin={async (account, password) => { const user = await signInWithPassword(account, password); if (user) setCloudUser({ id: user.id, email: user.email }) }} onRegister={async (account, password, name) => { const result = await signUpWithPassword(account, password, name); if (!result.session || !result.user) throw new Error('注册成功，请先到邮箱完成验证，再返回登录'); setCloudUser({ id: result.user.id, email: result.user.email }); setData(current => ({ ...current, profile: { ...current.profile, name } })) }} />
+  if (supabaseEnabled && !cloudUser) return <AccountGate cloudEnabled onLogin={async (account, password) => { const user = await signInWithPassword(account, password); if (user) { const cloud = await loadCloudData(user.id); if (cloud) setData(current => ({ ...current, ...cloud, checkin: { ...current.checkin, ...cloud.checkin }, plan: { ...current.plan, ...cloud.plan, cardio: { ...current.plan.cardio, ...cloud.plan?.cardio } } })); setCloudUser({ id: user.id, email: user.email }) } }} onRegister={async (account, password, name) => { const result = await signUpWithPassword(account, password, name); if (!result.session || !result.user) throw new Error('注册成功，请先到邮箱完成验证，再返回登录'); setCloudUser({ id: result.user.id, email: result.user.email }); setData(current => ({ ...current, profile: { ...current.profile, name } })) }} />
   if (!supabaseEnabled && !localUsername) return <AccountGate cloudEnabled={false} onLogin={async (account, password) => { const active = await loginLocalUser(account, password); setLocalUsername(active); setData(loadData(active)) }} onRegister={async (account, password, name) => { const active = await registerLocalUser(account, password, name); setLocalUsername(active); setData(loadData(active)) }} />
 
   if (!data.onboarded) return <Onboarding profile={data.profile} onComplete={async profile => {
     const checkin = { ...data.checkin, availableMinutes: profile.sessionDuration }
     update({ profile, checkin, onboarded: true })
+    if (cloudUser) {
+      saveProfile(cloudUser.id, profile).catch(() => {})
+      saveBodyMetrics(cloudUser.id, profile.weightKg).catch(() => {})
+    }
     try {
       const plan = await generateDailyPlan(profile, {}, checkin, '根据首次问卷生成初始训练、营养和饮水计划', ai)
       const weeklySchedule = await generateSevenDaySchedule(profile, checkin, {}, ai)
